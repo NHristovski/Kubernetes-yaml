@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-order-config
+  labels:
+    app: postgres-order
+data:
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: password
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: postgres-order-pv-claim
+  labels:
+    app: postgres-order
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 3Gi  
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-order
+  labels:
+        app: postgres-order
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-order
+  template:
+    metadata:
+      name: postgres-order
+      labels:
+        app: postgres-order
+    spec:
+      containers:
+        - name: postgres-order
+          image: postgres
+          imagePullPolicy: "Always"
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: postgres-order-config
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgredb
+              subPath: postgres
+      volumes:
+        - name: postgredb
+          persistentVolumeClaim:
+            claimName: postgres-order-pv-claim
+---            
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-order-service
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres-order
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432            
+---      
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: order
+    labels:
+        app: order
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            app: order
+    minReadySeconds: 10
+    strategy:
+        rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
+        type: RollingUpdate
+    template:
+        metadata:
+            name: order
+            labels:
+                app: order
+        spec:
+            containers:
+            - name: order
+              image: nikolahristovski/order:0.0.1-SNAPSHOT
+              ports:
+              - containerPort: 8555
+              imagePullPolicy: Always  
+            initContainers:  
+            - name: init-service-discovery
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup service-discovery-priv-service.default.svc.cluster.local; do echo waiting for service-discovery-priv-service.default.svc.cluster.local; sleep 2; done"]  
+            - name: init-zipkin
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup zipkin-service.default.svc.cluster.local; do echo waiting for zipkin-service.default.svc.cluster.local; sleep 2; done"]              
+            - name: init-config-server
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup config-server-service.default.svc.cluster.local; do echo waiting for config-server-service.default.svc.cluster.local; sleep 2; done"]                              
+            - name: init-db
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup postgres-order-service.default.svc.cluster.local; do echo waiting for postgres-order-service.default.svc.cluster.local; sleep 2; done"]                              
+            - name: init-kafka
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup my-cluster-kafka-bootstrap.kafka.svc.cluster.local; do echo waiting for my-cluster-kafka-bootstrap.kafka.svc.cluster.local; sleep 2; done"]                   
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+spec:
+  type: ClusterIP
+  selector:
+    app: order
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8555    

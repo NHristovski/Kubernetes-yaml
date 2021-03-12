@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: config-server
+    labels:
+        app: config-server
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            app: config-server
+    minReadySeconds: 10
+    strategy:
+        rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
+        type: RollingUpdate
+    template:
+        metadata:
+            name: config-server
+            labels:
+                app: config-server
+        spec:
+            containers:
+            - name: config-server
+              image: nikolahristovski/config_server:0.0.1-SNAPSHOT
+              ports:
+              - containerPort: 8888
+            initContainers:
+            - name: init-service-discovery
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup service-discovery-priv-service.default.svc.cluster.local; do echo waiting for service-discovery-priv-service.default.svc.cluster.local; sleep 2; done"]  
+            - name: init-zipkin
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup zipkin-service.default.svc.cluster.local; do echo waiting for zipkin-service.default.svc.cluster.local; sleep 2; done"]                
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: config-server-service
+spec:
+  type: ClusterIP
+  selector:
+    app: config-server
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8888

@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-rating-config
+  labels:
+    app: postgres-rating
+data:
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: password
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: postgres-rating-pv-claim
+  labels:
+    app: postgres-rating
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 3Gi  
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-rating
+  labels:
+        app: postgres-rating
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-rating
+  template:
+    metadata:
+      name: postgres-rating
+      labels:
+        app: postgres-rating
+    spec:
+      containers:
+        - name: postgres-rating
+          image: postgres
+          imagePullPolicy: "Always"
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: postgres-rating-config
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgredb
+              subPath: postgres
+      volumes:
+        - name: postgredb
+          persistentVolumeClaim:
+            claimName: postgres-rating-pv-claim
+---            
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-rating-service
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres-rating
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432      
+---          
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: rating
+    labels:
+        app: rating
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            app: rating
+    minReadySeconds: 10
+    strategy:
+        rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
+        type: RollingUpdate
+    template:
+        metadata:
+            name: rating
+            labels:
+                app: rating
+        spec:
+            containers:
+            - name: rating
+              image: nikolahristovski/rating:0.0.1-SNAPSHOT
+              ports:
+              - containerPort: 8205
+              imagePullPolicy: Always  
+            initContainers:  
+            - name: init-service-discovery
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup service-discovery-priv-service.default.svc.cluster.local; do echo waiting for service-discovery-priv-service.default.svc.cluster.local; sleep 2; done"]  
+            - name: init-zipkin
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup zipkin-service.default.svc.cluster.local; do echo waiting for zipkin-service.default.svc.cluster.local; sleep 2; done"]              
+            - name: init-config-server
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup config-server-service.default.svc.cluster.local; do echo waiting for config-server-service.default.svc.cluster.local; sleep 2; done"]                              
+            - name: init-db
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup postgres-rating-service.default.svc.cluster.local; do echo waiting for postgres-rating-service.default.svc.cluster.local; sleep 2; done"]                
+            - name: init-kafka
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup my-cluster-kafka-bootstrap.kafka.svc.cluster.local; do echo waiting for my-cluster-kafka-bootstrap.kafka.svc.cluster.local; sleep 2; done"]                   
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rating-service
+spec:
+  type: ClusterIP
+  selector:
+    app: rating
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8205

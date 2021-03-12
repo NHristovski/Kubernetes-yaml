@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-inventory-config
+  labels:
+    app: postgres-inventory
+data:
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: password
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: postgres-inventory-pv-claim
+  labels:
+    app: postgres-inventory
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 3Gi  
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-inventory
+  labels:
+        app: postgres-inventory
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-inventory
+  template:
+    metadata:
+      name: postgres-inventory
+      labels:
+        app: postgres-inventory
+    spec:
+      containers:
+        - name: postgres-inventory
+          image: postgres
+          imagePullPolicy: "Always"
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: postgres-inventory-config
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgredb
+              subPath: postgres
+      volumes:
+        - name: postgredb
+          persistentVolumeClaim:
+            claimName: postgres-inventory-pv-claim
+---            
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-inventory-service
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres-inventory
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432            
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: inventory
+    labels:
+        app: inventory
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            app: inventory
+    minReadySeconds: 10
+    strategy:
+        rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
+        type: RollingUpdate
+    template:
+        metadata:
+            name: inventory
+            labels:
+                app: inventory
+        spec:
+            containers:
+            - name: inventory
+              image: nikolahristovski/inventory:0.0.1-SNAPSHOT
+              ports:
+              - containerPort: 8599
+              imagePullPolicy: Always  
+            initContainers:    
+            - name: init-service-discovery
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup service-discovery-priv-service.default.svc.cluster.local; do echo waiting for service-discovery-priv-service.default.svc.cluster.local; sleep 2; done"]  
+            - name: init-zipkin
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup zipkin-service.default.svc.cluster.local; do echo waiting for zipkin-service.default.svc.cluster.local; sleep 2; done"]              
+            - name: init-config-server
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup config-server-service.default.svc.cluster.local; do echo waiting for config-server-service.default.svc.cluster.local; sleep 2; done"]                              
+            - name: init-db
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup postgres-inventory-service.default.svc.cluster.local; do echo waiting for postgres-inventory-service.default.svc.cluster.local; sleep 2; done"]              
+            - name: init-kafka
+              image: busybox:1.28
+              command: ['sh', '-c', "until nslookup my-cluster-kafka-bootstrap.kafka.svc.cluster.local; do echo waiting for my-cluster-kafka-bootstrap.kafka.svc.cluster.local; sleep 2; done"]                   
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-service
+spec:
+  type: ClusterIP
+  selector:
+    app: inventory
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8599    
